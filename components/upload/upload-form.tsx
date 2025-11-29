@@ -4,7 +4,9 @@ import UploadFormInput from "./upload-form-input";
 import { z } from "zod"
 import { useUploadThing } from "@/utils/uploadthing";
 import { toast } from "sonner"
-import { generatePdfSummary } from "@/actions/upload-action";
+import { generatePdfSummary, storePdfSummaryAction } from "@/actions/upload-action";
+import { useRef, useState } from "react";
+import { da } from "zod/v4/locales";
 
 // Zod validation schema
 const schema = z.object({
@@ -14,6 +16,10 @@ const schema = z.object({
 })
 
 export default function UploadForm() {
+
+    const [isLoading, setIsLoading] = useState(false)
+
+    const formRef = useRef<HTMLFormElement>(null)
 
     const { startUpload } = useUploadThing("pdfUploader", {
         onClientUploadComplete: () => {
@@ -33,36 +39,65 @@ export default function UploadForm() {
     const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
 
-        const formData = new FormData(e.currentTarget);
-        const file = formData.get('file') as File;
+        try {
+            setIsLoading(true)
 
-        // Validate file
-        const validateFields = schema.safeParse({ file });
+            const formData = new FormData(e.currentTarget);
+            const file = formData.get('file') as File;
 
-        if (!validateFields.success) {
-            const msg = validateFields.error.flatten().fieldErrors.file?.[0]
-                ?? "⚠️ Invalid File";
-            toast.error(msg);
-            return;
+            // Validate file
+            const validateFields = schema.safeParse({ file });
+
+            if (!validateFields.success) {
+                const msg = validateFields.error.flatten().fieldErrors.file?.[0]
+                    ?? "⚠️ Invalid File";
+                toast.error(msg);
+                setIsLoading(false)
+                return;
+            }
+
+            toast.info("🔍 Validating file...");
+            console.log("File validated, starting upload...");
+
+            // Start upload
+            const resp = await startUpload([file]);
+
+            if (!resp) {
+                toast.error("⚠️ Something went wrong while uploading.");
+                setIsLoading(false)
+                return;
+            }
+            console.log("-->", resp)
+            const result = await generatePdfSummary(resp)
+
+            const { data = null, message = null } = result || {}
+
+            if (data) {
+                let storeResult: any
+                toast.info("📄 Saving PDF...");
+                if (data.summary) {
+                    const resolvedSummary = await data.summary;
+                    storeResult = await storePdfSummaryAction({
+                        summary: resolvedSummary,
+                        fileUrl: resp[0].ufsUrl,
+                        title: data.title,
+                        fileName: file.name
+                    });
+                }
+                formRef.current?.reset()
+                toast.info("📄 PDF Saved Successfully!");
+            }
+        }
+        catch (error) {
+            setIsLoading(false)
+            console.error("Error Occured")
+            formRef.current?.reset()
         }
 
-        toast.info("🔍 Validating file...");
-        console.log("File validated, starting upload...");
-
-        // Start upload
-        const resp = await startUpload([file]);
-
-        if (!resp) {
-            toast.error("⚠️ Something went wrong while uploading.");
-            return;
-        }
-
-        const summary = await generatePdfSummary(resp)
-    };
-
+    }
     return (
         <div className="flex flex-col gap-8 w-full max-w-2xl mx-auto">
-            <UploadFormInput onSubmit={handleSubmit} />
+            <UploadFormInput isLoading={isLoading} ref={formRef} onSubmit={handleSubmit} />
         </div>
     );
 }
